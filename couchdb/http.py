@@ -160,7 +160,12 @@ class ResponseBody(object):
 
     def close(self):
         while not self.resp.isclosed():
-            self.resp.read(CHUNK_SIZE)
+            chunk = self.resp.read(CHUNK_SIZE)
+            #alexandre-couchdb-python-app-engine changes
+            # on App Engine self.resp.isclosed() is always False and leads to an infinite loop
+            if len(chunk) == 0:
+                self.resp.close()
+            ###################################
         if self.conn:
             self._release_conn()
 
@@ -271,6 +276,17 @@ class Session(object):
             headers['Authorization'] = authorization
 
         path_query = util.urlunsplit(('', '') + util.urlsplit(url)[2:4] + ('',))
+
+        #alexandre-couchdb-python-app-engine change
+        #Use the same connection object with multiple POST requests on app engine
+        #concatenates successive requests bodies
+        # e.g
+        # Req1: body1
+        # Req2: body1 body2
+        # Req3: body1 body2 body3
+        # ...
+        if method == "POST" or method == "PUT":
+            self.connection_pool.remove(url)
         conn = self.connection_pool.get(url)
 
         def _try_request_with_retries(retries):
@@ -492,6 +508,14 @@ class ConnectionPool(object):
             self.conns.setdefault((scheme, host), []).append(conn)
         finally:
             self.lock.release()
+
+    #alexandre-couchdb-python-app-engine Change
+    def remove(self, url):
+        scheme, host = util.urlsplit(url, 'http', False)[:2]
+        connList = self.conns[(scheme,host)]
+        for conn in connList:
+            conn.close() #No Op on Google App Engine
+        self.conns.pop((scheme,host),0)
 
     def __del__(self):
         for key, conns in list(self.conns.items()):
